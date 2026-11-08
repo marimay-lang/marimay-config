@@ -1,0 +1,22 @@
+.mmay/
+build/
+.DS_Store
+__pycache__/
+
+# Generated files and private local developer state
+.DS_Store
+.soba/
+.mmay/
+build/
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.netrc
+.npmrc

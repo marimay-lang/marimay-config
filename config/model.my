@@ -1,0 +1,196 @@
+import * as bytes from "std/bytes";
+import * as json from "std/json";
+import * as path from "std/path";
+import * as text from "std/text";
+
+public type Project {
+  public name: string,
+  public root: string,
+}
+
+public type Scan {
+  public extensions: []string,
+  public maxFileBytes: int,
+  public requiredFiles: []string,
+}
+
+public type Configuration {
+  public version: int,
+  public project: Project,
+  public scan: Scan,
+}
+
+type Version1 {
+  public version: int,
+  public name: string,
+  public root: string,
+  public extensions: []string,
+  public maxFileBytes: int,
+}
+
+public enum Error {
+  Json { value: json.Error, },
+  Invalid { location: string, reason: string, },
+  UnsupportedVersion { version: int, },
+}
+
+fn jsonError(value: json.Error): Error {
+  return Error.Json { value };
+}
+
+public fn location(error: Error): string {
+  return match error {
+    Json { value } => json.pathText(value),
+    Invalid { location, reason: _ } => location,
+    UnsupportedVersion { version: _ } => "$[\"version\"]",
+  };
+}
+
+public fn message(error: Error): string {
+  return match error {
+    Json { value } => $"Ошибка JSON: {json.message(value)}",
+    Invalid { location, reason } => $"{location}: {reason}",
+    UnsupportedVersion {
+      version,
+    } => $"Неподдерживаемая версия конфига: {version}; ожидается 1 или 2",
+  };
+}
+
+fn nonempty(value: string, location: string): Result<void, Error> {
+  if text.trimAscii(value) == "" {
+    return Err(Error.Invalid { location, reason: "значение не должно быть пустым" });
+  }
+  if text.byteLength(value) > 4096 {
+    return Err(Error.Invalid { location, reason: "значение длиннее 4096 байт UTF-8" });
+  }
+  return Ok();
+}
+
+fn validPath(value: string, location: string): Result<void, Error> {
+  nonempty(value, location)?;
+  return match path.fromString(value) {
+    Ok(_) => Ok(),
+    Err(_) => Err(Error.Invalid { location, reason: "недопустимый путь" }),
+  };
+}
+
+fn validateFields(
+  project: Project,
+  scan: Scan,
+  projectPath: string,
+  scanPath: string,
+): Result<void, Error> {
+  nonempty(project.name, $"{projectPath}[\"name\"]")?;
+  validPath(project.root, $"{projectPath}[\"root\"]")?;
+  if scan.maxFileBytes < 1 || scan.maxFileBytes > 67108864 {
+    return Err(
+      Error.Invalid {
+        location: $"{scanPath}[\"maxFileBytes\"]",
+        reason: "размер должен быть от 1 до 67108864 байт",
+      },
+    );
+  }
+  const extensions = setOf<string>();
+  let index = 0;
+  for extension in scan.extensions {
+    const location = $"{scanPath}[\"extensions\"][{index}]";
+    if !text.startsWith(extension, ".")
+      || text.byteLength(extension) < 2
+      || text.byteLength(extension) > 64
+      || text.contains(extension, "/")
+      || text.contains(extension, "\\")
+      || text.contains(extension, "\n")
+      || text.contains(extension, "\r")
+      || text.contains(extension, "\t")
+      || text.contains(extension, " ")
+      || text.contains(extension, "\0") {
+      return Err(
+        Error.Invalid {
+          location,
+          reason: "расширение должно начинаться с точки и содержать от 2 до 64 байт без разделителей и пробелов",
+        },
+      );
+    }
+    if extensions.contains(extension) {
+      return Err(Error.Invalid { location, reason: "повторяющееся расширение" });
+    }
+    const _ = extensions.add(extension);
+    index += 1;
+  }
+  const required = setOf<string>();
+  index = 0;
+  for file in scan.requiredFiles {
+    const location = $"{scanPath}[\"requiredFiles\"][{index}]";
+    validPath(file, location)?;
+    if required.contains(file) {
+      return Err(Error.Invalid { location, reason: "повторяющийся обязательный файл" });
+    }
+    const _ = required.add(file);
+    index += 1;
+  }
+  return Ok();
+}
+
+public fn validate(value: Configuration): Result<void, Error> {
+  if value.version != 2 {
+    return Err(Error.UnsupportedVersion { version: value.version });
+  }
+  return validateFields(value.project, value.scan, "$[\"project\"]", "$[\"scan\"]");
+}
+
+fn readVersion(contents: bytes.Bytes, limits: json.Limits): Result<int, json.Error> {
+  const decoder = json.newDecoder(contents, limits)?;
+  json.beginObject(decoder)?;
+  while true {
+    const name = match json.nextField(decoder)? {
+      Some(value) => value,
+      None => {
+        break;
+      },
+    };
+    if name == "version" {
+      return match json.readInt(decoder) {
+        Ok(value) => Ok(value),
+        Err(error) => Err(json.atField(error, name)),
+      };
+    }
+    match json.skipValue(decoder) {
+      Ok(_) => {},
+      Err(error) => {
+        return Err(json.atField(error, name));
+      },
+    };
+  }
+  json.finishDecoder(decoder)?;
+  return Err(json.missingField(decoder, "version"));
+}
+
+public fn decode(contents: bytes.Bytes, limits: json.Limits): Result<Configuration, Error> {
+  const version = readVersion(contents, limits).mapError(jsonError)?;
+  if version == 1 {
+    const previous = json.decodeWithLimits<Version1>(contents, limits).mapError(jsonError)?;
+    const project = Project { name: previous.name, root: previous.root };
+    const scan = Scan {
+      extensions: previous.extensions,
+      maxFileBytes: previous.maxFileBytes,
+      requiredFiles: [],
+    };
+    validateFields(project, scan, "$", "$")?;
+    return Ok(Configuration { version: 2, project, scan });
+  }
+  if version == 2 {
+    const value = json.decodeWithLimits<Configuration>(contents, limits).mapError(jsonError)?;
+    validate(value)?;
+    return Ok(value);
+  }
+  return Err(Error.UnsupportedVersion { version });
+}
+
+public fn encode(value: Configuration, limits: json.Limits): Result<bytes.Bytes, Error> {
+  validate(value)?;
+  return json.encodeWithLimits(value, limits).mapError(jsonError);
+}
+
+public fn migrate(contents: bytes.Bytes, limits: json.Limits): Result<bytes.Bytes, Error> {
+  return encode(decode(contents, limits)?, limits);
+}

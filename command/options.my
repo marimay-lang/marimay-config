@@ -1,0 +1,115 @@
+import * as cli from "std/cli";
+import * as convert from "std/convert";
+import * as text from "std/text";
+
+public type Request {
+  public help: bool,
+  public command: string,
+  public input: string,
+  public output: Option<string>,
+  public json: bool,
+  public maxBytes: int,
+}
+
+fn parser(): cli.Parser {
+  return match cli.newParser(
+    "marimay-config",
+    "Проверка и миграция JSON-конфига сканера проекта.",
+    [
+      cli.flagOption("help", Some("h"), false, false, "Показать справку."),
+      cli.flagOption("json", None, false, false, "Вывести отчёт в JSON."),
+      cli.flagOption("in-place", None, false, false, "Атомарно заменить входной файл."),
+      cli.requiredValueOption(
+        "output",
+        Some("o"),
+        "ПУТЬ",
+        false,
+        false,
+        "Записать результат в файл.",
+      ),
+      cli.requiredValueOption(
+        "max-bytes",
+        None,
+        "БАЙТЫ",
+        false,
+        false,
+        "Лимит входа и результата от 1 до 1048576 байт.",
+      ),
+    ],
+    [
+      cli.positional("command", false, false, "validate или migrate"),
+      cli.positional("input", false, false, "путь или - для stdin"),
+    ],
+    cli.defaultLimits(),
+  ) {
+    Ok(value) => value,
+    Err(_) => panic("Некорректное описание команд marimay-config"),
+  };
+}
+
+fn option(parsed: cli.Parsed, name: string): Option<string> {
+  const values = cli.occurrences(parsed, name);
+  if values.length() == 0 {
+    return None;
+  }
+  return values[0];
+}
+
+public fn parse(arguments: []string): Result<Request, string> {
+  const parsed = cli.parse(parser(), arguments).mapError(cli.message)?;
+  if cli.count(parsed, "help") != 0 {
+    return Ok(
+      Request { help: true, command: "", input: "", output: None, json: false, maxBytes: 1048576 },
+    );
+  }
+  const commands = cli.positionalValues(parsed, "command");
+  const inputs = cli.positionalValues(parsed, "input");
+  if commands.length() != 1 || inputs.length() != 1 {
+    return Err("Нужны команда и входной файл; см. --help");
+  }
+  const command = commands[0];
+  const input = inputs[0];
+  if command != "validate" && command != "migrate" {
+    return Err("Неизвестная команда; ожидается validate или migrate");
+  }
+  if text.trimAscii(input) == "" {
+    return Err("Входной путь не должен быть пустым");
+  }
+  let output = option(parsed, "output");
+  const inPlace = cli.count(parsed, "in-place") != 0;
+  const hasOutput = cli.count(parsed, "output") != 0;
+  const json = cli.count(parsed, "json") != 0;
+  if command == "validate" && (inPlace || hasOutput) {
+    return Err("validate ничего не записывает: --output и --in-place недопустимы");
+  }
+  if inPlace {
+    if hasOutput || input == "-" {
+      return Err("--in-place требует входной файл и несовместим с --output");
+    }
+    output = Some(input);
+  }
+  if command == "migrate" && json && !inPlace && !hasOutput {
+    return Err("Для отчёта --json при migrate нужен --output или --in-place");
+  }
+  match output {
+    None => {},
+    Some(value) => {
+      if text.trimAscii(value) == "" || value == "-" {
+        return Err("Выходной путь не должен быть пустым или -; для stdout не задавайте --output");
+      }
+    },
+  };
+  const maxBytes = match option(parsed, "max-bytes") {
+    None => 1048576,
+    Some(value) => match convert.parseInt(value) {
+      Ok(limit) => limit,
+      Err(_) => {
+        return Err("--max-bytes должен быть целым числом");
+      },
+    },
+  };
+  if maxBytes < 1 || maxBytes > 1048576 {
+    return Err("--max-bytes должен быть от 1 до 1048576");
+  }
+  return Ok(Request { help: false, command, input, output, json, maxBytes });
+}

@@ -1,0 +1,66 @@
+import * as bytes from "std/bytes";
+import * as io from "std/io";
+import * as json from "std/json";
+
+public type Project {
+  public name: string,
+  public root: string,
+}
+
+public type Scan {
+  public extensions: []string,
+  public maxFileBytes: int,
+  public requiredFiles: []string,
+}
+
+public type Config {
+  public version: int,
+  public project: Project,
+  public scan: Scan,
+}
+
+fn probe(mode: string): Result<int, string> {
+  const input = io.readBytes(1048576).mapError(io.message)?;
+  if mode == "read" {
+    return Ok(bytes.length(input));
+  }
+  if mode == "copy" {
+    return Ok(bytes.length(bytes.copy(input)));
+  }
+  if mode == "utf8" {
+    return match bytes.decodeUtf8(input) {
+      Ok(_) => Ok(bytes.length(input)),
+      Err(_) => Err("invalid UTF-8"),
+    };
+  }
+  if mode == "typed" {
+    const value = json.decode<Config>(input).mapError(json.message)?;
+    return Ok(value.scan.requiredFiles.length());
+  }
+  const decoder = json.newDecoder(input, json.defaultLimits()).mapError(json.message)?;
+  if mode == "skip" {
+    json.skipValue(decoder).mapError(json.message)?;
+    json.finishDecoder(decoder).mapError(json.message)?;
+  } else if mode != "decoder" {
+    return Err("expected read/copy/utf8/decoder/skip/typed");
+  }
+  return Ok(bytes.length(input));
+}
+
+fn main(arguments: []string): int {
+  if arguments.length() != 1 {
+    return 2;
+  }
+  return match probe(arguments[0]) {
+    Ok(value) => {
+      const _ = io.println($"{value}");
+      const _ = io.flushStdout();
+      0
+    },
+    Err(error) => {
+      const _ = io.eprintln(error);
+      const _ = io.flushStderr();
+      1
+    },
+  };
+}

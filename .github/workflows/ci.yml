@@ -1,0 +1,50 @@
+name: Marimay learning project CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Format, check, and compare VM/native tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CC: clang
+      MMAY: ${{ github.workspace }}/marimay/build/ci/mmay
+    steps:
+      - name: Check out example source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: project
+          persist-credentials: false
+      - name: Check out public Marimay compiler
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: marimay-lang/marimay
+          ref: main
+          path: marimay
+          persist-credentials: false
+      - name: Configure portable C17 compiler
+        run: >-
+          cmake -S marimay -B marimay/build/ci
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_C_STANDARD=17
+          -DBUILD_TESTING=OFF
+          -DMMAY_WARNINGS_AS_ERRORS=ON
+      - name: Build compiler and native runtime profiles
+        run: >-
+          cmake --build marimay/build/ci --parallel 2
+          --target mmay mmay_native_runtime_debug mmay_native_runtime_release
+      - name: Format, type-check, and compare execution engines
+        working-directory: project
+        run: |
+          "$MMAY" fmt . --check
+          "$MMAY" check .
+          "$MMAY" test . --engine both

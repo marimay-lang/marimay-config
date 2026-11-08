@@ -1,0 +1,180 @@
+import * as bytes from "std/bytes";
+import * as fs from "std/fs";
+import * as io from "std/io";
+import * as json from "std/json";
+import * as path from "std/path";
+
+import * as command from "local/marimay-config/command";
+import * as config from "local/marimay-config/config";
+
+type Report {
+  public ok: bool,
+  public message: string,
+  public location: string,
+}
+
+fn flush(error: bool): bool {
+  return match error {
+    true => match io.flushStderr() {
+      Ok(_) => true,
+      Err(_) => false,
+    },
+    false => match io.flushStdout() {
+      Ok(_) => true,
+      Err(_) => false,
+    },
+  };
+}
+
+fn report(value: Report, structured: bool, error: bool): bool {
+  const message = value.message;
+  if !structured {
+    const written = match error {
+      true => match io.eprintln($"marimay-config: {message}") {
+        Ok(_) => true,
+        Err(_) => false,
+      },
+      false => match io.println(message) {
+        Ok(_) => true,
+        Err(_) => false,
+      },
+    };
+    return written && flush(error);
+  }
+  const output = match json.encode(value) {
+    Ok(result) => result,
+    Err(_) => {
+      return false;
+    },
+  };
+  const written = match error {
+    true => match io.ewriteBytes(output) {
+      Ok(_) => true,
+      Err(_) => false,
+    },
+    false => match io.writeBytes(output) {
+      Ok(_) => true,
+      Err(_) => false,
+    },
+  };
+  return written && flush(error);
+}
+
+fn fail(message: string, location: string, structured: bool, status: int): int {
+  const _ = report(Report { ok: false, message, location }, structured, true);
+  return status;
+}
+
+fn help(): int {
+  const lines = [
+    "marimay-config — проверка и миграция JSON-конфига сканера проекта",
+    "",
+    "  marimay-config validate ФАЙЛ [--json]",
+    "  marimay-config migrate ФАЙЛ [--output ПУТЬ | --in-place] [--json]",
+    "",
+    "Вход - означает stdin. Без --output/--in-place миграция пишет JSON в stdout.",
+    "validate никогда не записывает файлы. Поддерживаются версии 1 и 2; результат — 2.",
+    "--max-bytes N ограничивает вход и результат (1..1048576, по умолчанию 1048576).",
+    "--json включает JSON-отчёт; для migrate он требует записи в файл.",
+    "Ошибки идут в stderr. Коды выхода: 0 — успех, 1 — данные/I/O, 2 — аргументы.",
+    "Через mmay передавайте аргументы приложения после -- и явно разрешайте I/O.",
+  ];
+  for line in lines {
+    match io.println(line) {
+      Ok(_) => {},
+      Err(_) => {
+        return 1;
+      },
+    };
+  }
+  return match flush(false) {
+    true => 0,
+    false => 1,
+  };
+}
+
+fn read(input: string, limit: int): Result<bytes.Bytes, string> {
+  if input == "-" {
+    return io.readBytes(limit).mapError(io.message);
+  }
+  const source = match path.fromString(input) {
+    Ok(value) => value,
+    Err(_) => {
+      return Err("Недопустимый входной путь");
+    },
+  };
+  return fs.readBytes(source, limit).mapError(fs.message);
+}
+
+fn write(output: Option<string>, contents: bytes.Bytes): Result<void, string> {
+  if const name = output {
+    const destination = match path.fromString(name) {
+      Ok(value) => value,
+      Err(_) => {
+        return Err("Недопустимый выходной путь");
+      },
+    };
+    return fs.writeBytes(destination, contents).mapError(fs.message);
+  }
+  const outputError: (io.Error) => string = io.message;
+  io.writeBytes(contents).mapError(outputError)?;
+  return io.flushStdout().mapError(outputError);
+}
+
+fn main(arguments: []string): int {
+  const request = match command.parse(arguments) {
+    Ok(value) => value,
+    Err(error) => {
+      return fail(error, "$", false, 2);
+    },
+  };
+  if request.help {
+    return help();
+  }
+  const input = match read(request.input, request.maxBytes) {
+    Ok(value) => value,
+    Err(error) => {
+      return fail(error, "$", request.json, 1);
+    },
+  };
+  const limits = json.limits(request.maxBytes, request.maxBytes, 262144, 128, 128, 65536);
+  const value = match config.decode(input, limits) {
+    Ok(value) => value,
+    Err(error) => {
+      return fail(config.message(error), config.location(error), request.json, 1);
+    },
+  };
+  if request.command == "validate" {
+    return match report(
+      Report { ok: true, message: "Конфиг корректен.", location: "$" },
+      request.json,
+      false,
+    ) {
+      true => 0,
+      false => 1,
+    };
+  }
+  const output = match config.encode(value, limits) {
+    Ok(value) => value,
+    Err(error) => {
+      return fail(config.message(error), config.location(error), request.json, 1);
+    },
+  };
+  match write(request.output, output) {
+    Ok(_) => {},
+    Err(error) => {
+      return fail(error, "$", request.json, 1);
+    },
+  };
+  return match request.output {
+    None => 0,
+    Some(_) => match report(
+      Report { ok: true, message: "Конфиг записан в формате версии 2.", location: "$" },
+      request.json,
+      false,
+    ) {
+      true => 0,
+      false => 1,
+    },
+  };
+}

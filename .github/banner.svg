@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+<title id="title">Project configuration</title><desc id="desc">marimay-config. Typed JSON validation and migration. Part of Marimay, an open-source personal learning and hobby project.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#142e32"/><stop offset="1" stop-color="#0d1c24"/></linearGradient><pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M36 0H0V36" fill="none" stroke="#b9e6dc" stroke-opacity=".055"/></pattern></defs>
+<rect width="1200" height="360" rx="24" fill="url(#bg)"/><rect width="1200" height="360" rx="24" fill="url(#grid)"/>
+<path d="M0 327H1200" stroke="#75cdb7" stroke-opacity=".22"/>
+<circle cx="1058" cy="153" r="101" fill="#75cdb7" fill-opacity=".055" stroke="#75cdb7" stroke-opacity=".17"/><circle cx="1058" cy="153" r="73" fill="none" stroke="#75cdb7" stroke-opacity=".2" stroke-dasharray="3 8"/>
+<text x="52" y="53" fill="#83d9c3" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" letter-spacing="3">MARIMAY / LEARNING IN PUBLIC</text>
+<text x="52" y="137" fill="#f3f0e8" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="45" font-weight="650" letter-spacing="-1.5">Project configuration</text>
+<text x="54" y="184" fill="#b8cbc9" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="22">Typed JSON validation and migration.</text>
+<rect x="53" y="222" width="468" height="42" rx="10" fill="#75cdb7" fill-opacity=".09" stroke="#75cdb7" stroke-opacity=".18"/>
+<text x="71" y="248" fill="#b9e6dc" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">marimay-config</text>
+<text x="988" y="169" fill="#e9bf79" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="49">.my</text>
+<text x="54" y="348" fill="#9fb5b2" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" letter-spacing="2">MIT / OPEN SOURCE / PERSONAL HOBBY PROJECT</text>
+</svg>

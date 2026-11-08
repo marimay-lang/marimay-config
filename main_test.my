@@ -1,0 +1,139 @@
+import * as bytes from "std/bytes";
+import * as json from "std/json";
+
+import * as command from "local/marimay-config/command";
+import * as config from "local/marimay-config/config";
+
+fn migration(source: string): string {
+  const output = match config.migrate(bytes.encodeUtf8(source), json.defaultLimits()) {
+    Ok(value) => value,
+    Err(error) => panic(config.message(error)),
+  };
+  return match bytes.decodeUtf8(output) {
+    Ok(value) => value,
+    Err(_) => panic("миграция вернула неверный UTF-8"),
+  };
+}
+
+fn rejected(source: string, location: string): void {
+  match config.decode(bytes.encodeUtf8(source), json.defaultLimits()) {
+    Ok(_) => panic("некорректный конфиг принят"),
+    Err(error) => expect.equal(config.location(error), location),
+  };
+}
+
+@test
+fn migrationIsStableAndPreservesUnicode(): void {
+  const source = "{\"name\":\"Проект 🌿\",\"root\":\".\",\"extensions\":[\".my\",\".json\"],\"maxFileBytes\":1024,\"version\":1}";
+  const expected = "{\"version\":2,\"project\":{\"name\":\"Проект 🌿\",\"root\":\".\"},\"scan\":{\"extensions\":[\".my\",\".json\"],\"maxFileBytes\":1024,\"requiredFiles\":[]}}";
+  expect.equal(migration(source), expected);
+  expect.equal(migration(expected), expected);
+}
+
+@test
+fn schemaErrorsHavePaths(): void {
+  rejected("{}", "$[\"version\"]");
+  rejected("{\"version\":\"1\"}", "$[\"version\"]");
+  rejected("{\"version\":3}", "$[\"version\"]");
+  rejected("{\"version\":1,\"version\":1}", "$[\"version\"]");
+  rejected(
+    "{\"version\":2,\"project\":{\"name\":false,\"root\":\".\"}}",
+    "$[\"project\"][\"name\"]",
+  );
+  rejected(
+    "{\"version\":2,\"project\":{\"name\":\"x\",\"root\":\".\"},\"scan\":{\"extensions\":[null],\"maxFileBytes\":1,\"requiredFiles\":[]}}",
+    "$[\"scan\"][\"extensions\"][0]",
+  );
+  rejected("{\"version\":1,\"extra\":true}", "$[\"extra\"]");
+}
+
+@test
+fn businessRulesRejectInvalidValues(): void {
+  rejected(
+    "{\"version\":1,\"name\":\" \",\"root\":\".\",\"extensions\":[],\"maxFileBytes\":1}",
+    "$[\"name\"]",
+  );
+  rejected(
+    "{\"version\":1,\"name\":\"x\",\"root\":\"\",\"extensions\":[],\"maxFileBytes\":1}",
+    "$[\"root\"]",
+  );
+  rejected(
+    "{\"version\":1,\"name\":\"x\",\"root\":\".\",\"extensions\":[],\"maxFileBytes\":0}",
+    "$[\"maxFileBytes\"]",
+  );
+  rejected(
+    "{\"version\":1,\"name\":\"x\",\"root\":\".\",\"extensions\":[\".my\",\".my\"],\"maxFileBytes\":1}",
+    "$[\"extensions\"][1]",
+  );
+  rejected(
+    "{\"version\":1,\"name\":\"x\",\"root\":\".\",\"extensions\":[\"txt\"],\"maxFileBytes\":1}",
+    "$[\"extensions\"][0]",
+  );
+}
+
+@test
+fn limitsAreEnforced(): void {
+  const source = bytes.encodeUtf8(
+    "{\"version\":1,\"name\":\"x\",\"root\":\".\",\"extensions\":[],\"maxFileBytes\":1}",
+  );
+  expect.err(config.decode(source, json.limits(8, 1048576, 4096, 128, 128, 65536)));
+  expect.err(config.migrate(source, json.limits(1048576, 8, 4096, 128, 128, 65536)));
+}
+
+@test
+fn independentDecodesAndReadOnlyEncode(): void {
+  const source = bytes.encodeUtf8(
+    "{\"version\":2,\"project\":{\"name\":\"x\",\"root\":\".\"},\"scan\":{\"extensions\":[\".my\"],\"maxFileBytes\":1,\"requiredFiles\":[]}}",
+  );
+  const first = match config.decode(source, json.defaultLimits()) {
+    Ok(value) => value,
+    Err(error) => panic(config.message(error)),
+  };
+  const second = match config.decode(source, json.defaultLimits()) {
+    Ok(value) => value,
+    Err(error) => panic(config.message(error)),
+  };
+  first.scan.extensions[0] = ".md";
+  const _ = first.scan.requiredFiles.push("README.md");
+  expect.equal(second.scan.extensions[0], ".my");
+  expect.equal(second.scan.requiredFiles.length(), 0);
+  expect.ok(config.encode(first, json.defaultLimits()));
+  expect.equal(first.scan.extensions[0], ".md");
+  expect.equal(first.scan.requiredFiles[0], "README.md");
+  first.scan.extensions[0] = "invalid";
+  expect.err(config.encode(first, json.defaultLimits()));
+}
+
+@test
+fn versionTwoRequirementsAreChecked(): void {
+  rejected(
+    "{\"version\":2,\"project\":{\"name\":\"x\",\"root\":\".\"},\"scan\":{\"extensions\":[],\"maxFileBytes\":1,\"requiredFiles\":[\"a\",\"a\"]}}",
+    "$[\"scan\"][\"requiredFiles\"][1]",
+  );
+  rejected(
+    "{\"version\":2,\"project\":{\"name\":\"x\",\"root\":\".\"},\"scan\":{\"extensions\":[],\"maxFileBytes\":1,\"requiredFiles\":[\"\"]}}",
+    "$[\"scan\"][\"requiredFiles\"][0]",
+  );
+}
+
+@test
+fn commandLineModes(): void {
+  const parsed = match command.parse(
+    ["migrate", "file.json", "--in-place", "--json", "--max-bytes=1000"],
+  ) {
+    Ok(value) => value,
+    Err(error) => panic(error),
+  };
+  expect.equal(parsed.command, "migrate");
+  expect.equal(parsed.input, "file.json");
+  expect.equal(parsed.maxBytes, 1000);
+  expect.true(parsed.json);
+  expect.equal(parsed.output, Some("file.json"));
+  expect.err(command.parse(["validate", "file.json", "--in-place"]));
+  expect.err(command.parse(["migrate", "-", "--in-place"]));
+  expect.err(command.parse(["migrate", "file.json", "--in-place", "--output", "other.json"]));
+  expect.err(command.parse(["migrate", "-", "--json"]));
+  expect.err(command.parse(["validate", "-", "--max-bytes=-1"]));
+  expect.err(command.parse(["validate", "-", "--max-bytes=1048577"]));
+  expect.err(command.parse(["validate", "-", "--unknown"]));
+}
